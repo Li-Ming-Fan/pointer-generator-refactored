@@ -23,12 +23,15 @@ import os
 import time
 import tensorflow as tf
 import beam_search
-import data
+
 import json
 import pyrouge
 import model_utils
 import logging
 # import numpy as np
+
+import data_utils
+from vocab import STOP_DECODING
 
 SECS_UNTIL_NEW_CKPT = 60  # max number of seconds before loading new checkpoint
 
@@ -96,8 +99,8 @@ class BeamSearchDecoder(object):
             original_abstract = batch.original_abstracts[0]  # string
             original_abstract_sents = batch.original_abstracts_sents[0]  # list of strings
             
-            article_withunks = data.show_art_oovs(original_article, self._vocab) # string
-            abstract_withunks = data.show_abs_oovs(original_abstract, self._vocab,
+            article_withunks = data_utils.show_art_oovs(original_article, self._vocab) # string
+            abstract_withunks = data_utils.show_abs_oovs(original_abstract, self._vocab,
                                                    (batch.art_oovs[0] if self.settings.using_pointer_gen else None)) # string
             
             # Run beam search to get best Hypothesis
@@ -105,12 +108,12 @@ class BeamSearchDecoder(object):
             
             # Extract the output ids from the hypothesis and convert back to words
             output_ids = [int(t) for t in best_hyp.tokens[1:]]
-            decoded_words = data.outputids2words(output_ids, self._vocab,
+            decoded_words = data_utils.outputids2words(output_ids, self._vocab,
                                                  (batch.art_oovs[0] if self.settings.using_pointer_gen else None))
             
             # Remove the [STOP] token from decoded_words, if necessary
             try:
-                fst_stop_idx = decoded_words.index(data.STOP_DECODING) # index of the (first) [STOP] symbol
+                fst_stop_idx = decoded_words.index(STOP_DECODING) # index of the (first) [STOP] symbol
                 decoded_words = decoded_words[:fst_stop_idx]
             except ValueError:
                 decoded_words = decoded_words

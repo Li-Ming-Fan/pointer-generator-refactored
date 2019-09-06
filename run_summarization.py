@@ -21,8 +21,11 @@ import os
 import tensorflow as tf
 import numpy as np
 # from collections import namedtuple
-from data import Vocab
-from batcher import Batcher
+
+from vocab import Vocab
+from Zeras.data_batcher import DataBatcher
+from data_utils import example_generator, do_batch_std
+
 from model import SummarizationModel
 from decode import BeamSearchDecoder
 import model_utils
@@ -48,8 +51,10 @@ def parse_args():
     parser = argparse.ArgumentParser('Summarization')
     parser.add_argument('--mode', choices=['train', 'eval', 'convert', 'decode'],
                         default = 'train', help = 'run mode')
-    parser.add_argument('--single_pass', default = False,
-                        type = bool, help='single_pass')
+    parser.add_argument('--single_pass', type = bool,
+                        default = False, help='single_pass')
+    parser.add_argument('--worker_type', choices=['thread', 'process'], 
+                        default = "thread", help='worker_type')
     #
     parser.add_argument('--data_path', type = str, 
                         default = None, help = 'data_path')
@@ -232,7 +237,7 @@ def run_training(model, batcher, settings, sess_context_manager, sv, summary_wri
             sess = tf_debug.LocalCLIDebugWrapperSession(sess)
             sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
         while True: # repeats until interrupted
-            batch = batcher.next_batch()
+            batch = batcher.get_next_batch()
             
             tf.logging.info('running training step...')
             t0=time.time()
@@ -273,7 +278,7 @@ def run_eval(model, batcher, vocab, settings):
 
     while True:
         model_utils.load_ckpt(saver, sess, settings.log_root) # load a new checkpoint
-        batch = batcher.next_batch() # get the next batch
+        batch = batcher.get_next_batch() # get the next batch
     
         # run eval on the batch
         t0=time.time()
@@ -322,6 +327,7 @@ def main(settings):
             raise Exception("Logdir %s doesn't exist. Run in train mode to create it." % (settings.log_root))
 
     vocab = Vocab(settings.vocab_path, settings.vocab_size) # create a vocabulary
+    settings.vocab = vocab
 
     # If in decode mode, set batch_size = beam_size
     # Reason: in decode mode, we decode one example at a time.
@@ -346,10 +352,20 @@ def main(settings):
     hps = settings
 
     # Create a batcher object that will create minibatches of data
-    batcher = Batcher(settings.data_path, vocab, hps, single_pass=settings.single_pass)
+    # batcher = Batcher(settings.data_path, vocab, hps, single_pass=settings.single_pass)
 
+    example_gen = lambda single_pass: example_generator(settings.data_path,
+                                                        single_pass)
+    batch_standardizer = lambda list_exams: do_batch_std(list_exams, settings)
+    #
+    batcher = DataBatcher(example_gen, batch_standardizer,
+                          settings.batch_size, settings.single_pass,
+                          worker_type = settings.worker_type)
+    #
+    
+    #
     tf.set_random_seed(111) # a seed value for randomness
-
+    #
     if hps.mode == 'train':
         print("creating model...")
         model = SummarizationModel(hps, vocab)

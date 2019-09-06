@@ -14,17 +14,171 @@
 # limitations under the License.
 # ==============================================================================
 
-"""This file contains code to process data into batches"""
+"""This file contains code to read the train/eval/test data from file and process it, and read the vocab data from file and process it"""
 
-import queue as Queue
-from random import shuffle
-from threading import Thread
-import time
+import glob
+import random
+import struct
+from tensorflow.core.example import example_pb2
+
 import numpy as np
-import tensorflow as tf
-import data
+
+#
+from vocab import SENTENCE_START, SENTENCE_END
+from vocab import PAD_TOKEN, UNKNOWN_TOKEN, START_DECODING, STOP_DECODING
+
+#
+def article2ids(article_words, vocab):
+    """ Map the article words to their ids. Also return a list of OOVs in the article.
+    
+      Args:
+        article_words: list of words (strings)
+        vocab: Vocabulary object
+    
+      Returns:
+        ids:
+          A list of word ids (integers); OOVs are represented by their temporary article OOV number.
+          If the vocabulary size is 50k and the article has 3 OOVs,
+          then these temporary OOV numbers will be 50000, 50001, 50002.
+        oovs:
+          A list of the OOV words in the article (strings),
+          in the order corresponding to their temporary article OOV numbers.
+    """
+    ids = []
+    oovs = []
+    unk_id = vocab.word2id(UNKNOWN_TOKEN)
+    for w in article_words:
+        i = vocab.word2id(w)
+        if i == unk_id: # If w is OOV
+            if w not in oovs: # Add to list of OOVs
+                oovs.append(w)
+            #
+            oov_num = oovs.index(w) # This is 0 for the first article OOV, 1 for the second article OOV...
+            ids.append(vocab.size() + oov_num) # This is e.g. 50000 for the first article OOV, 50001 for the second...
+        else:
+            ids.append(i)
+    #
+    return ids, oovs
+
+def abstract2ids(abstract_words, vocab, article_oovs):
+    """ Map the abstract words to their ids. In-article OOVs are mapped to their temporary OOV numbers.
+
+      Args:
+        abstract_words: list of words (strings)
+        vocab: Vocabulary object
+        article_oovs: list of in-article OOV words (strings),
+        in the order corresponding to their temporary article OOV numbers
+    
+      Returns:
+        ids: List of ids (integers). In-article OOV words are mapped to their temporary OOV numbers.
+        Out-of-article OOV words are mapped to the UNK token id.
+    """
+    ids = []
+    unk_id = vocab.word2id(UNKNOWN_TOKEN)
+    for w in abstract_words:
+        i = vocab.word2id(w)
+        if i == unk_id: # If w is an OOV word
+            if w in article_oovs: # If w is an in-article OOV
+                vocab_idx = vocab.size() + article_oovs.index(w) # Map to its temporary article OOV number
+                ids.append(vocab_idx)
+            else: # If w is an out-of-article OOV
+                ids.append(unk_id) # Map to the UNK token id
+        else:
+            ids.append(i)
+    #
+    return ids
+
+def outputids2words(id_list, vocab, article_oovs):
+    """ Maps output ids to words, 
+        including mapping in-article OOVs from their temporary ids to the original OOV string
+        (applicable in pointer-generator mode).
+
+      Args:
+        id_list: list of ids (integers)
+        vocab: Vocabulary object
+        article_oovs: list of OOV words (strings) in the order corresponding to their temporary article OOV ids
+        (that have been assigned in pointer-generator mode), or None (in baseline mode)
+    
+      Returns:
+        words: list of words (strings)
+    """
+    words = []
+    for i in id_list:
+        try:
+            w = vocab.id2word(i) # might be [UNK]
+        except ValueError as e: # w is OOV
+            error_info = "Error: model produced a word ID that isn't in the vocabulary. This should not happen in baseline (no pointer-generator) mode"
+            assert article_oovs is not None, error_info
+            article_oov_idx = i - vocab.size()
+            try:
+                w = article_oovs[article_oov_idx]
+            except ValueError as e: # i doesn't correspond to an article oov
+                raise ValueError('Error: model produced word ID %i which corresponds to article OOV %i but this example only has %i article OOVs' % (i, article_oov_idx, len(article_oovs)))
+        #
+        words.append(w)
+        #
+        
+    return words
+
+def abstract2sents(abstract):
+    """ Splits abstract text from datafile into list of sentences.
+    
+    Args:
+        abstract: string containing <s> and </s> tags for starts and ends of sentences
+    
+    Returns:
+        sents: List of sentence strings (no tags)
+    """
+    cur = 0
+    sents = []
+    while True:
+        try:
+            start_p = abstract.index(SENTENCE_START, cur)
+            end_p = abstract.index(SENTENCE_END, start_p + 1)
+            cur = end_p + len(SENTENCE_END)
+            sents.append(abstract[start_p+len(SENTENCE_START):end_p])
+        except ValueError as e: # no more sentences
+            return sents
+
+def show_art_oovs(article, vocab):
+    """ Returns the article string, highlighting the OOVs by placing __underscores__ around them
+    """
+    unk_token = vocab.word2id(UNKNOWN_TOKEN)
+    words = article.split(' ')
+    words = [("__%s__" % w) if vocab.word2id(w)==unk_token else w for w in words]
+    out_str = ' '.join(words)
+    
+    return out_str
+
+def show_abs_oovs(abstract, vocab, article_oovs):
+    """ Returns the abstract string, highlighting the article OOVs with __underscores__.
+    If a list of article_oovs is provided, non-article OOVs are differentiated like !!__this__!!.
+    
+    Args:
+        abstract: string
+        vocab: Vocabulary object
+        article_oovs: list of words (strings), or None (in baseline mode)
+    """
+    unk_token = vocab.word2id(UNKNOWN_TOKEN)
+    words = abstract.split(' ')
+    new_words = []
+    for w in words:
+        if vocab.word2id(w) == unk_token: # w is oov
+            if article_oovs is None: # baseline mode
+                new_words.append("__%s__" % w)
+            else: # pointer-generator mode
+                if w in article_oovs:
+                    new_words.append("__%s__" % w)
+                else:
+                    new_words.append("!!__%s__!!" % w)
+        else: # w is in-vocab word
+            new_words.append(w)
+    #        
+    out_str = ' '.join(new_words)
+    return out_str
 
 
+#
 class Example(object):
     """ Class representing a train/val/test example for text summarization.
     """
@@ -40,8 +194,8 @@ class Example(object):
         self.settings = settings
 
         # Get ids of special tokens
-        start_decoding = vocab.word2id(data.START_DECODING)
-        stop_decoding = vocab.word2id(data.STOP_DECODING)
+        start_decoding = vocab.word2id(START_DECODING)
+        stop_decoding = vocab.word2id(STOP_DECODING)
     
         # Process the article
         article_words = article.split()
@@ -65,10 +219,10 @@ class Example(object):
         if settings.using_pointer_gen:
           # Store a version of the enc_input where in-article OOVs are represented by their temporary OOV id;
           # also store the in-article OOVs words themselves
-          self.enc_input_extend_vocab, self.article_oovs = data.article2ids(article_words, vocab)
+          self.enc_input_extend_vocab, self.article_oovs = article2ids(article_words, vocab)
     
           # Get a verison of the reference summary where in-article OOVs are represented by their temporary article OOV id
-          abs_ids_extend_vocab = data.abstract2ids(abstract_words, vocab, self.article_oovs)
+          abs_ids_extend_vocab = abstract2ids(abstract_words, vocab, self.article_oovs)
     
           # Overwrite decoder target sequence so it uses the temp article OOV ids
           _, self.target = self.get_dec_inp_targ_seqs(abs_ids_extend_vocab, settings.max_dec_steps,
@@ -136,7 +290,7 @@ class Batch(object):
            settings: hyperparameters
            vocab: Vocabulary object
         """
-        self.pad_id = vocab.word2id(data.PAD_TOKEN) # id of the PAD token used to pad sequences
+        self.pad_id = vocab.word2id(PAD_TOKEN) # id of the PAD token used to pad sequences
         self.init_encoder_seq(example_list, settings) # initialize the input to the encoder
         self.init_decoder_seq(example_list, settings) # initialize the input and targets for the decoder
         self.store_orig_strings(example_list) # store the original strings
@@ -220,161 +374,78 @@ class Batch(object):
         self.original_articles = [ex.original_article for ex in example_list] # list of lists
         self.original_abstracts = [ex.original_abstract for ex in example_list] # list of lists
         self.original_abstracts_sents = [ex.original_abstract_sents for ex in example_list] # list of list of lists
-    
-    
-class Batcher(object):
-    """ A class to generate minibatches of data.
-    Buckets examples together based on length of the encoder sequence.
-    """
-    BATCH_QUEUE_MAX = 100 # max number of batches the batch_queue can hold
-    
-    def __init__(self, data_path, vocab, settings, single_pass):
-        """Initialize the batcher. Start threads that process the data into batches.
-    
-        Args:
-          data_path: tf.Example filepattern.
-          vocab: Vocabulary object
-          settings: hyperparameters
-          single_pass: If True, run through the dataset exactly once (useful for when you want to run evaluation on the dev or test set). Otherwise generate random batches indefinitely (useful for training).
-        """
-        self._data_path = data_path
-        self._vocab = vocab
-        self._settings = settings
-        self._single_pass = single_pass
-    
-        # Initialize a queue of Batches waiting to be used, and a queue of Examples waiting to be batched
-        self._batch_queue = Queue.Queue(self.BATCH_QUEUE_MAX)
-        self._example_queue = Queue.Queue(self.BATCH_QUEUE_MAX * self._settings.batch_size)
-    
-        # Different settings depending on whether we're in single_pass mode or not
-        if single_pass:
-            self._num_example_q_threads = 1 # just one thread, so we read through the dataset just once
-            self._num_batch_q_threads = 1  # just one thread to batch examples
-            self._bucketing_cache_size = 1 # only load one batch's worth of examples before bucketing; this essentially means no bucketing
-            self._finished_reading = False # this will tell us when we're finished reading the dataset
-        else:
-            self._num_example_q_threads = 16 # num threads to fill example queue
-            self._num_batch_q_threads = 4  # num threads to fill batch queue
-            self._bucketing_cache_size = 100 # how many batches-worth of examples to load into cache before bucketing
-            
-        # Start the threads that load the queues
-        self._example_q_threads = []
-        for _ in range(self._num_example_q_threads):
-            self._example_q_threads.append(Thread(target=self.fill_example_queue))
-            self._example_q_threads[-1].daemon = True
-            self._example_q_threads[-1].start()
-            self._batch_q_threads = []
-        for _ in range(self._num_batch_q_threads):
-            self._batch_q_threads.append(Thread(target=self.fill_batch_queue))
-            self._batch_q_threads[-1].daemon = True
-            self._batch_q_threads[-1].start()
-    
-        # Start a thread that watches the other threads and restarts them if they're dead
-        if not single_pass: # We don't want a watcher in single_pass mode because the threads shouldn't run forever
-            self._watch_thread = Thread(target=self.watch_threads)
-            self._watch_thread.daemon = True
-            self._watch_thread.start()
-          
-    def next_batch(self):
-        """Return a Batch from the batch queue.
-    
-        If mode='decode' then each batch contains a single example repeated beam_size-many times; this is necessary for beam search.
-    
-        Returns:
-          batch: a Batch object, or None if we're in single_pass mode and we've exhausted the dataset.
-        """
-        # If the batch queue is empty, print a warning
-        if self._batch_queue.qsize() == 0:
-            tf.logging.warning('Bucket input queue is empty when calling next_batch. Bucket queue size: %i, Input queue size: %i', self._batch_queue.qsize(), self._example_queue.qsize())
-            if self._single_pass and self._finished_reading:
-                tf.logging.info("Finished reading dataset in single_pass mode.")
-                return None
-    
-        batch = self._batch_queue.get() # get the next Batch
-        return batch
-    
-    def fill_example_queue(self):
-        """Reads data from file and processes into Examples which are then placed into the example queue."""
-    
-        input_gen = self.text_generator(data.example_generator(self._data_path, self._single_pass))
-    
-        while True:
-            try:
-                (article, abstract) = next(input_gen) # read the next example from file. article and abstract are both strings.
-            except StopIteration: # if there are no more examples:
-                tf.logging.info("The example generator for this example queue filling thread has exhausted data.")
-                if self._single_pass:
-                    tf.logging.info("single_pass mode is on, so we've finished reading dataset. This thread is stopping.")
-                    self._finished_reading = True
-                    break
-                else:
-                    raise Exception("single_pass mode is off but the example generator is out of data; error.")
-                
-            abstract_sentences = [sent.strip() for sent in data.abstract2sents(abstract)] # Use the <s> and </s> tags in abstract to get a list of sentences.
-            example = Example(article, abstract_sentences, self._vocab, self._settings) # Process into an Example.
-            self._example_queue.put(example) # place the Example in the example queue.
-          
-    def fill_batch_queue(self):
-        """Takes Examples out of example queue, sorts them by encoder sequence length, processes into Batches and places them in the batch queue.
-    
-        In decode mode, makes batches that each contain a single example repeated.
-        """
-        while True:
-            if self._settings.mode != 'decode':
-                # Get bucketing_cache_size-many batches of Examples into a list, then sort
-                inputs = []
-                for _ in range(self._settings.batch_size * self._bucketing_cache_size):
-                    inputs.append(self._example_queue.get())
-                inputs = sorted(inputs, key=lambda inp: inp.enc_len) # sort by length of encoder sequence
-    
-                # Group the sorted Examples into batches, optionally shuffle the batches, and place in the batch queue.
-                batches = []
-                for i in range(0, len(inputs), self._settings.batch_size):
-                    batches.append(inputs[i:i + self._settings.batch_size])
-                if not self._single_pass:
-                    shuffle(batches)
-                for b in batches:  # each b is a list of Example objects
-                    self._batch_queue.put(Batch(b, self._settings, self._vocab))
-                    
-            else: # beam search decode mode
-                ex = self._example_queue.get()
-                b = [ex for _ in range(self._settings.batch_size)]
-                self._batch_queue.put(Batch(b, self._settings, self._vocab))
-    
-    def watch_threads(self):
-        """Watch example queue and batch queue threads and restart if dead."""
-        while True:
-            time.sleep(60)
-            for idx,t in enumerate(self._example_q_threads):
-                if not t.is_alive(): # if the thread is dead
-                    tf.logging.error('Found example queue thread dead. Restarting.')
-                    new_t = Thread(target=self.fill_example_queue)
-                    self._example_q_threads[idx] = new_t
-                    new_t.daemon = True
-                    new_t.start()
-            for idx,t in enumerate(self._batch_q_threads):
-                if not t.is_alive(): # if the thread is dead
-                    tf.logging.error('Found batch queue thread dead. Restarting.')
-                    new_t = Thread(target=self.fill_batch_queue)
-                    self._batch_q_threads[idx] = new_t
-                    new_t.daemon = True
-                    new_t.start()
-                    
-    def text_generator(self, example_generator):
-        """Generates article and abstract text from tf.Example.
-    
-        Args:
-          example_generator: a generator of tf.Examples from file. See data.example_generator"""
-        while True:
-            e = next(example_generator) # e is a tf.Example
-            try:
-                article_text = e.features.feature['article'].bytes_list.value[0].decode() # the article text was saved under the key 'article' in the data files
-                abstract_text = e.features.feature['abstract'].bytes_list.value[0].decode() # the abstract text was saved under the key 'abstract' in the data files
-            except ValueError:
-                tf.logging.error('Failed to get article or abstract from example')
-                continue
-            if len(article_text)==0: # See https://github.com/abisee/pointer-generator/issues/1
-                tf.logging.warning('Found an example with empty article text. Skipping it.')
-            else:
-                yield (article_text, abstract_text)
 
+
+#
+# load data
+def example_generator(data_path, single_pass):
+    """ Generates tf.Examples from data files.
+    
+        Binary data format: <length><blob>. <length> represents the byte size
+        of <blob>. <blob> is serialized tf.Example proto. The tf.Example contains
+        the tokenized article text and summary.
+    
+      Args:
+        data_path:
+          Path to tf.Example data files. Can include wildcards, e.g. if you have several training data chunk files train_001.bin, train_002.bin, etc, then pass data_path=train_* to access them all.
+        single_pass:
+          Boolean. If True, go through the dataset exactly once, generating examples in the order they appear, then return. Otherwise, generate random examples indefinitely.
+    
+      Yields:
+        Deserialized tf.Example.
+    """
+    while True:
+        filelist = glob.glob(data_path) # get the list of datafiles
+        assert filelist, ('Error: Empty filelist at %s' % data_path) # check filelist isn't empty
+        #
+        if single_pass:
+            filelist = sorted(filelist)
+        else:
+            random.shuffle(filelist)
+        for f in filelist:
+            reader = open(f, 'rb')
+            while True:
+                len_bytes = reader.read(8)
+                if not len_bytes: break # finished reading this file
+                str_len = struct.unpack('q', len_bytes)[0]
+                example_str = struct.unpack('%ds' % str_len, reader.read(str_len))[0]
+                e = example_pb2.Example.FromString(example_str)
+                #
+                try:
+                    article_text = e.features.feature['article'].bytes_list.value[0].decode() # the article text was saved under the key 'article' in the data files
+                    abstract_text = e.features.feature['abstract'].bytes_list.value[0].decode() # the abstract text was saved under the key 'abstract' in the data files
+                except ValueError:
+                    print('Failed to get article or abstract from example')
+                    continue
+                if len(article_text)==0: # See https://github.com/abisee/pointer-generator/issues/1
+                    print('Found an example with empty article text. Skipping it.')
+                else:
+                    # print(abstract_text)
+                    # print()
+                    yield (article_text, abstract_text)
+                #
+        #
+        if single_pass:
+            print("example_generator completed reading all datafiles. No more data.")
+            break
+        #
+      
+#
+def do_batch_std(list_examples_raw, settings):
+    """
+    """
+    list_examples = []
+    for article, abstract in list_examples_raw:
+        #
+        # Use the <s> and </s> tags in abstract to get a list of sentences.
+        abstract_sentences = [sent.strip() for sent in abstract2sents(abstract)]
+        #
+        example = Example(article, abstract_sentences, settings.vocab, settings)
+        list_examples.append(example)
+        #
+    #
+    # print()
+    # print(len(list_examples))
+    #
+    batch = Batch(list_examples, settings, settings.vocab)
+    return batch
