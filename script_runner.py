@@ -25,7 +25,9 @@ from vocab import Vocab
 from Zeras.data_batcher import DataBatcher
 from data_utils import example_generator, do_batch_std
 
-from model import SummarizationModel
+# from model import SummarizationModel
+from model_summ_pgn import SummarizationModel
+
 from decode import BeamSearchDecoder
 import model_utils
 
@@ -190,6 +192,14 @@ if __name__ == '__main__':
     #
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    #
+    
+    #
+    args.log_device = False
+    args.soft_placement = False
+    args.gpu_mem_growth = True
+    
+
     #
     if args.data_path is None:
         if args.mode == "train":

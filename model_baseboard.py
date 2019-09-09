@@ -79,7 +79,7 @@ class ModelBaseboard(metaclass=ABCMeta):
     def set_model_settings(self, settings):
         #
         self.settings = settings
-        self.num_gpu = len(settings.gpu_available.split(","))
+        self.num_gpu = len(settings.gpu.split(","))
         #
         # session info
         self.sess_config = tf.ConfigProto(log_device_placement = settings.log_device,
@@ -113,13 +113,7 @@ class ModelBaseboard(metaclass=ABCMeta):
         pass
     
     @abstractmethod
-    def feed_data_train(self, batch):
-        """ feed to self.input_tensors and self.label_tensors
-        """
-        pass
-    
-    @abstractmethod
-    def feed_data_eval(self, batch):
+    def make_feed_dict_train(self, batch):
         """ feed to self.input_tensors and self.label_tensors
         """
         pass
@@ -129,36 +123,30 @@ class ModelBaseboard(metaclass=ABCMeta):
     # self.results_eval_one_batch = {}
     # self.results_debug_one_batch = {}
     #
-    # feed_dict = self.feed_data_predict(x_batch)
+    # feed_dict = self.get_feed_dict_predict(x_batch)
     # outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)
     #
     
     # one_batch functions
     def run_train_one_batch(self, one_batch):
         """ self.results_train_one_batch, NEED to be defined
-            for the purpose:
-            results = self._sess.run(self.results_train_one_batch, feed_dict = feed_dict)
         """
-        feed_dict = self.feed_data_train(one_batch)
+        feed_dict = self.make_feed_dict_train(one_batch)
         results = self._sess.run(self.results_train_one_batch, feed_dict = feed_dict)
         return results
         
     def run_eval_one_batch(self, one_batch):
         """ self.results_eval_one_batch, NEED to be defined
-            for the purpose:
-            results = self._sess.run(self.results_eval_one_batch, feed_dict = feed_dict)
         """
-        feed_dict = self.feed_data_eval(one_batch)        
+        feed_dict = self.make_feed_dict_train(one_batch)        
         results = self._sess.run(self.results_eval_one_batch, feed_dict = feed_dict)
         return results
         
     def run_debug_one_batch(self, one_batch):
         """ self.results_debug_one_batch, NEED to be defined
-            for the purpose:
-            results = self._sess.run(self.results_debug_one_batch, feed_dict = feed_dict)
         """
         assert self.num_gpu == 1, "debug mode can only be run with single gpu"
-        feed_dict = self.feed_data_train(one_batch)
+        feed_dict = self.make_feed_dict_train(one_batch)
         results = self._sess.run(self.results_debug_one_batch, feed_dict = feed_dict)        
         return results
     
@@ -185,10 +173,10 @@ class ModelBaseboard(metaclass=ABCMeta):
         #
     
     def predict_one_batch_with_pb(self, x_batch):
-        """ feed_dict = self.feed_data_predict(x_batch)
+        """ feed_dict = self.make_feed_dict_predict(x_batch)
             outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict) 
         """
-        feed_dict = self.feed_data_predict(x_batch)
+        feed_dict = self.make_feed_dict_predict(x_batch)
         outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)        
         return outputs
     
