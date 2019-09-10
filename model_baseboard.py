@@ -114,21 +114,29 @@ class ModelBaseboard(metaclass=ABCMeta):
         pass
     
     @abstractmethod
+    def set_model_port_tensors(self):
+        """ 
+        self.src_seq = input_tensors["src_seq"]
+        ...
+        
+        # self.results_train_one_batch = {}
+        # self.results_eval_one_batch = {}
+        # self.results_debug_one_batch = {}
+        
+        #
+        # feed_dict = self.make_feed_dict_for_predict(x_batch)
+        # outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)
+        #
+        
+        """
+        pass
+    
+    @abstractmethod
     def make_feed_dict_for_train(self, batch):
         """ feed to input_tensors and label_tensors
         """
         pass
-    
-    #
-    # @abstractvalue
-    #
-    # self.results_train_one_batch = {}
-    # self.results_eval_one_batch = {}
-    # self.results_debug_one_batch = {}
-    #
-    # feed_dict = self.make_feed_dict_for_predict(x_batch)
-    # outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)
-    #
+
     
     # one_batch functions
     def run_train_one_batch(self, one_batch):
@@ -154,82 +162,24 @@ class ModelBaseboard(metaclass=ABCMeta):
         return results
     
     #
-    # predict
-    def prepare_for_prediction_with_pb(self, pb_file_path = None):
-        """ load pb for prediction
-        """
-        if pb_file_path is None: pb_file_path = self.settings.pb_file 
-        if not os.path.exists(pb_file_path):
-            assert False, 'ERROR: %s NOT exists, when prepare_for_prediction()' % pb_file_path
-        #
-        self._graph = tf.Graph()
-        with self._graph.as_default():
-            with open(pb_file_path, "rb") as f:
-                graph_def = tf.GraphDef()
-                graph_def.ParseFromString(f.read())
-                tf.import_graph_def(graph_def, name="")
-                #
-                print('Graph loaded for prediction')
-                #
-        #
-        self._sess = tf.Session(graph = self._graph, config = self.sess_config)
-        #
-    
-    def predict_one_batch_with_pb(self, x_batch):
-        """ feed_dict = self.make_feed_dict_for_predict(x_batch)
-            outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict) 
-        """
-        feed_dict = self.make_feed_dict_for_predict(x_batch)
-        outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)        
-        return outputs
-    
-    #
     # train and validate
-    def prepare_for_train_and_valid(self, dir_ckpt = None):
+    def prepare_for_train(self, dir_ckpt = None):
         """
         """
         # graph
         self._graph = tf.Graph()
         with self._graph.as_default():
-            #
-            self.global_step = tf.get_variable("global_step", shape=[], dtype=tf.int32,
-                                               initializer = tf.constant_initializer(0),
-                                               trainable = False)
-            #
-            self.learning_rate_tensor = self.learning_rate_schedule(self.settings, self.global_step)
-            #
-            # optimizer
-            # optimizer = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
-            # optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr, epsilon=1e-6)              
-            # optimizer = tf.train.AdamOptimizer(learning_rate = self.learning_rate, beta1 = MOMENTUM)
-            #
-            if self.optimizer_type == 'sgd':
-                self._opt = tf.train.GradientDescentOptimizer(self.learning_rate_tensor)
-            elif self.optimizer_type == 'momentum':
-                self._opt = tf.train.MomentumOptimizer(self.learning_rate_tensor, self.momentum, use_nesterov=True)
-            elif self.optimizer_type == 'adam':
-                self._opt = tf.train.AdamOptimizer(learning_rate = self.learning_rate_tensor, beta1 = self.momentum)
-            elif self.optimizer_type == 'customized':
-                self._opt = self.customized_optimizer(self.settings, self.learning_rate_tensor)
-            else:
-                assert False, "NOT supported optimizer_type"
-            #
-            # regularization
-            def is_excluded(v):
-                for item in self.settings.reg_exclusions:
-                    if item in v.name: return True
-                return False
-            #
+            #            
             # model
-            input_tensors, label_tensors = self.build_placeholder(self.settings)
+            input_tensors, label_tensors = self.build_placeholder()
             #
-            vs_str = self.vs_str_multi_gpu
+            vs_str = "vs_gpu" # self.settings.vs_str_multi_gpu
             #
             # single_gpu
             if self.num_gpu == 1:
                 with tf.variable_scope(vs_str):
-                    output_tensors = self.build_inference(self.settings, input_tensors)
-                    loss_tensors = self.build_loss(self.settings, output_tensors, label_tensors)
+                    output_tensors = self.build_inference(input_tensors)
+                    loss_tensors = self.build_loss(output_tensors, label_tensors)
                 #
                 # tensors
                 self.input_tensors = input_tensors
@@ -269,11 +219,8 @@ class ModelBaseboard(metaclass=ABCMeta):
                     for gid in range(self.num_gpu):
                         with tf.device("/gpu:%d" % gid), tf.name_scope("bundle_%d" % gid):
                             #
-                            output_tensors = self.build_inference(self.settings,
-                                                                  inputs_split[gid])
-                            loss_tensors = self.build_loss(self.settings,
-                                                           output_tensors,
-                                                           labels_split[gid])
+                            output_tensors = self.build_inference(inputs_split[gid])
+                            loss_tensors = self.build_loss(output_tensors, labels_split[gid])
                             #
                             tf.get_variable_scope().reuse_variables()
                             #
@@ -330,32 +277,71 @@ class ModelBaseboard(metaclass=ABCMeta):
             #
             
             #
+            # optimizer
+            self.global_step = tf.get_variable("global_step", shape=[], dtype=tf.int32,
+                                               initializer = tf.constant_initializer(0),
+                                               trainable = False)
+            #
+            self.learning_rate_tensor = self.learning_rate_schedule(self.settings, self.global_step)
+            #
+            # optimizer
+            # optimizer = tf.train.MomentumOptimizer(learning_rate, MOMENTUM, use_nesterov=True)
+            # optimizer = tf.train.AdadeltaOptimizer(learning_rate=self.lr, epsilon=1e-6)              
+            # optimizer = tf.train.AdamOptimizer(learning_rate = self.learning_rate, beta1 = MOMENTUM)
+            #
+            optimizer_type = self.settings.optimizer_type
+            if optimizer_type == 'sgd':
+                self._opt = tf.train.GradientDescentOptimizer(self.learning_rate_tensor)
+            elif optimizer_type == 'momentum':
+                self._opt = tf.train.MomentumOptimizer(self.learning_rate_tensor, self.settings.momentum, use_nesterov=True)
+            elif optimizer_type == 'adagrad':
+                self._opt = tf.train.AdagradOptimizer(self.learning_rate_tensor, self.settings.adagrad_init_acc)
+            elif optimizer_type == 'adam':
+                self._opt = tf.train.AdamOptimizer(self.learning_rate_tensor, beta1 = self.settings.momentum)
+            elif optimizer_type == 'customized':
+                self._opt = self.customized_optimizer(self.settings, self.learning_rate_tensor)
+            else:
+                assert False, "NOT supported optimizer_type"
+            #
+            
+            #
             # all trainable vars
             self.trainable_vars = tf.trainable_variables()
             # print(self.trainable_vars)
             #
             # regularization
+            def is_excluded(v):
+                for item in self.settings.reg_exclusions:
+                    if item in v.name: return True
+                return False
+            #
             if self.settings.reg_lambda > 0.0:
                 loss_reg = tf.add_n( [tf.nn.l2_loss(v) for v in self.trainable_vars
                                      if not is_excluded(v)] )
                 loss_reg = tf.multiply(loss_reg, self.settings.reg_lambda)
                 self.loss_train_tensor = tf.add(self.loss_train_tensor, loss_reg)
             #
-            # grad_and_vars
+            # gradient
             grad_and_vars = self._opt.compute_gradients(self.loss_train_tensor)
-            #
-            
             #
             # grad_clip           
             if self.settings.grad_clip > 0.0:
                 gradients, variables = zip(*grad_and_vars)
-                grads, _ = tf.clip_by_global_norm(gradients, self.settings.grad_clip)
+                grads, global_norm = tf.clip_by_global_norm(gradients, self.settings.grad_clip)
                 grad_and_vars = zip(grads, variables)
+                self.global_norm = global_norm
             #
             # train_op
             self.train_op = self._opt.apply_gradients(grad_and_vars,
                                                       global_step = self.global_step)
-            #                 
+            #
+            
+            #
+            # set port tensors
+            self.set_model_port_tensors()
+            #
+                        
+            #                
             # save info
             self._saver = tf.train.Saver()
             self._saver_best = tf.train.Saver()
@@ -471,6 +457,36 @@ class ModelBaseboard(metaclass=ABCMeta):
         model.settings.is_train = is_train           #
         model.num_gpu = num_gpu
         #
+        
+    #
+    # predict
+    def prepare_for_prediction_with_pb(self, pb_file_path = None):
+        """ load pb for prediction
+        """
+        if pb_file_path is None: pb_file_path = self.settings.pb_file 
+        if not os.path.exists(pb_file_path):
+            assert False, 'ERROR: %s NOT exists, when prepare_for_prediction()' % pb_file_path
+        #
+        self._graph = tf.Graph()
+        with self._graph.as_default():
+            with open(pb_file_path, "rb") as f:
+                graph_def = tf.GraphDef()
+                graph_def.ParseFromString(f.read())
+                tf.import_graph_def(graph_def, name="")
+                #
+                print('Graph loaded for prediction')
+                #
+        #
+        self._sess = tf.Session(graph = self._graph, config = self.sess_config)
+        #
+    
+    def predict_one_batch_with_pb(self, x_batch):
+        """ feed_dict = self.make_feed_dict_for_predict(x_batch)
+            outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict) 
+        """
+        feed_dict = self.make_feed_dict_for_predict(x_batch)
+        outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)        
+        return outputs
 
     # graph and sess
     def get_model_graph_and_sess(self):

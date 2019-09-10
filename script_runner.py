@@ -199,6 +199,19 @@ if __name__ == '__main__':
     args.soft_placement = False
     args.gpu_mem_growth = True
     
+    args.reg_lambda = 0.0
+    args.reg_exclusions = []
+    args.learning_rate_base = args.lr
+    
+    args.learning_rate_schedule = lambda settings, global_step: args.lr
+    
+    args.optimizer_type = "adagrad"
+    args.grad_clip = args.max_grad_norm
+    
+    args.keep_prob = 0.7
+    
+    import logging
+    args.logger = logging.getLogger() 
 
     #
     if args.data_path is None:

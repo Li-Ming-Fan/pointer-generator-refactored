@@ -16,7 +16,6 @@
 
 """This file contains code to build and run the tensorflow graph for the sequence-to-sequence model"""
 
-import time
 import numpy as np
 import tensorflow as tf
 
@@ -34,17 +33,12 @@ class SummarizationModel(ModelBaseboard):
     def __init__(self, settings, vocab):
         """
         """
-        super(SummarizationModel, self).__init__(settings)
+        super(SummarizationModel, self).__init__(settings,
+             settings.learning_rate_schedule)
         #
         # self.settings = settings
         #
         
-    #
-    def make_feed_dict_for_train(self, batch):
-        """
-        """
-        pass
-    
     #        
     def build_placeholder(self):
         """
@@ -105,6 +99,12 @@ class SummarizationModel(ModelBaseboard):
         #
         if sett.mode == "decode" and sett.using_coverage:
             prev_coverage = input_tensors["prev_coverage"]
+        #
+        
+        # keep_prob
+        keep_prob = tf.get_variable("keep_prob", shape=[], dtype=tf.float32, trainable=False)
+        #
+        print(keep_prob)
         #
         
         # embedding
@@ -244,12 +244,82 @@ class SummarizationModel(ModelBaseboard):
                 loss_tensors["total_loss"] = total_loss
                 loss_tensors["coverage_loss"] = coverage_loss                
                 #
+                loss_tensors["loss_train"] = total_loss
+                #
+            else:
+                #
+                loss_tensors["loss_train"] = loss
+                #
         #
         return loss_tensors
 
     #
     #
-    def _make_feed_dict(self, batch, just_enc=False):
+    def set_model_port_tensors(self):
+        """
+        """
+        # encoder part
+        self._enc_batch = self.input_tensors["src_seq"]
+        self._enc_lens = self.input_tensors["src_len"]
+        self._enc_padding_mask = self.input_tensors["src_mask"]
+        if self.settings.using_pointer_gen:
+            self._enc_batch_extend_vocab = self.input_tensors["src_seq_ed"]
+            self._max_art_oovs = self.input_tensors["max_art_oovs"]
+        #
+        # decoder part
+        self._dec_batch = self.input_tensors["dcd_seq"]
+        if self.settings.mode == "decode" and self.settings.using_coverage:
+            self.prev_coverage = self.input_tensors["prev_coverage"]
+        #
+        self._target_batch = self.label_tensors["labels_seq"]
+        self._dec_padding_mask = self.label_tensors["dcd_seq_mask"]
+        #
+        # output
+        self._enc_states = self.output_tensors["encoder_states"]
+        self._dec_in_state = self.output_tensors["dcd_init_state"]
+        #
+        self._dec_out_state = self.output_tensors["dcd_out_state"]
+        self.attn_dists = self.output_tensors["attn_dists"]  
+        self.p_gens = self.output_tensors["p_gens"]
+        self.coverage = self.output_tensors["coverage"]
+        #
+        if self.settings.mode == "decode":
+            self._topk_ids = self.output_tensors["topk_ids"]
+            self._topk_log_probs = self.output_tensors["topk_log_probs"]        
+        #
+        # loss        
+        self._loss = self.loss_tensors["loss"]
+        if self.settings.using_coverage:
+            self._total_loss = self.loss_tensors["total_loss"]
+            self._coverage_loss = self.loss_tensors["coverage_loss"]        
+        #
+        
+        #
+        # summary
+        self._summaries = tf.summary.merge_all()
+        #
+        
+        # results
+        self.results_train_one_batch = {
+                'train_op': self.train_op,
+                'summaries': self._summaries,
+                'loss': self._loss,
+                'global_step': self.global_step,
+        }
+        if self.settings.using_coverage:
+            self.results_train_one_batch['coverage_loss'] = self._coverage_loss
+        #
+        self.results_eval_one_batch = {
+                'summaries': self._summaries,
+                'loss': self._loss,
+                'global_step': self.global_step,
+        }
+        if self.settings.using_coverage:
+            self.results_eval_one_batch['coverage_loss'] = self._coverage_loss
+        #
+
+    #
+    def make_feed_dict_for_train(self, batch, just_encode=False):
         """
         """
         feed_dict = {}
@@ -261,120 +331,14 @@ class SummarizationModel(ModelBaseboard):
             feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
             feed_dict[self._max_art_oovs] = batch.max_art_oovs
         
-        if not just_enc:
+        if not just_encode:
             feed_dict[self._dec_batch] = batch.dec_batch
             feed_dict[self._target_batch] = batch.target_batch
             feed_dict[self._dec_padding_mask] = batch.dec_padding_mask
         
         return feed_dict
-    
-    #
-    def _add_train_op(self):
-        """ Sets self._train_op, the op to run for training.
-        """
-        # Take gradients of the trainable variables w.r.t. the loss function to minimize
-        loss_to_minimize = self._total_loss if self.settings.using_coverage else self._loss
-        tvars = tf.trainable_variables()
-        gradients = tf.gradients(loss_to_minimize, tvars, aggregation_method=tf.AggregationMethod.EXPERIMENTAL_TREE)
-        
-        # Clip the gradients
-        with tf.device("/gpu:0"):
-            grads, global_norm = tf.clip_by_global_norm(gradients, self.settings.max_grad_norm)
-            
-        # Add a summary
-        tf.summary.scalar('global_norm', global_norm)
-        
-        # Apply adagrad optimizer
-        optimizer = tf.train.AdagradOptimizer(self.settings.lr, initial_accumulator_value=self.settings.adagrad_init_acc)
-        with tf.device("/gpu:0"):
-            self._train_op = optimizer.apply_gradients(zip(grads, tvars), global_step=self.global_step, name='train_step')
-            
-    #
-    def build_graph(self):
-        """ Add the placeholders, model, global step, train_op and summaries to the graph
-        """
-        tf.logging.info('Building graph...')
-        t0 = time.time()
-        #
-        input_tensors, label_tensors = self.build_placeholder()
-        output_tensors = self.build_inference(input_tensors)
-        loss_tensors = self.build_loss(output_tensors, label_tensors)
-        #
-        #
-        # encoder part
-        self._enc_batch = input_tensors["src_seq"]
-        self._enc_lens = input_tensors["src_len"]
-        self._enc_padding_mask = input_tensors["src_mask"]
-        if self.settings.using_pointer_gen:
-            self._enc_batch_extend_vocab = input_tensors["src_seq_ed"]
-            self._max_art_oovs = input_tensors["max_art_oovs"]
-        #
-        # decoder part
-        self._dec_batch = input_tensors["dcd_seq"]
-        if self.settings.mode == "decode" and self.settings.using_coverage:
-            self.prev_coverage = input_tensors["prev_coverage"]
-        #
-        self._target_batch = label_tensors["labels_seq"]
-        self._dec_padding_mask = label_tensors["dcd_seq_mask"]
-        #
-        # output
-        self._enc_states = output_tensors["encoder_states"]
-        self._dec_in_state = output_tensors["dcd_init_state"]
-        #
-        self._dec_out_state = output_tensors["dcd_out_state"]
-        self.attn_dists = output_tensors["attn_dists"]  
-        self.p_gens = output_tensors["p_gens"]
-        self.coverage = output_tensors["coverage"]
-        #
-        if self.settings.mode == "decode":
-            self._topk_ids = output_tensors["topk_ids"]
-            self._topk_log_probs = output_tensors["topk_log_probs"]        
-        #
-        # loss        
-        self._loss = loss_tensors["loss"]
-        if self.settings.using_coverage:
-            self._total_loss = loss_tensors["total_loss"]
-            self._coverage_loss = loss_tensors["coverage_loss"] 
-        
-        #
-        # 
-        self.global_step = tf.Variable(0, name='global_step', trainable=False)
-        if self.settings.mode == 'train':
-            self._add_train_op()
-        self._summaries = tf.summary.merge_all()
-        t1 = time.time()
-        tf.logging.info('Time to build graph: %i seconds', t1 - t0)
-    
+
     #    
-    def run_train_step(self, sess, batch):
-        """ Runs one training iteration. Returns a dictionary containing train op, summaries, loss, global_step and (optionally) coverage loss.
-        """
-        feed_dict = self._make_feed_dict(batch)
-        results_to_return = {
-                'train_op': self._train_op,
-                'summaries': self._summaries,
-                'loss': self._loss,
-                'global_step': self.global_step,
-        }
-        if self.settings.using_coverage:
-            results_to_return['coverage_loss'] = self._coverage_loss
-        
-        return sess.run(results_to_return, feed_dict)
-    
-    def run_eval_step(self, sess, batch):
-        """ Runs one evaluation iteration. Returns a dictionary containing summaries, loss, global_step and (optionally) coverage loss.
-        """
-        feed_dict = self._make_feed_dict(batch)
-        results_to_return = {
-                'summaries': self._summaries,
-                'loss': self._loss,
-                'global_step': self.global_step,
-        }
-        if self.settings.using_coverage:
-            results_to_return['coverage_loss'] = self._coverage_loss
-            
-        return sess.run(results_to_return, feed_dict)
-    
     #
     def run_encoder(self, sess, batch):
         """ For beam search decoding. Run the encoder on the batch and return the encoder states and decoder initial state.

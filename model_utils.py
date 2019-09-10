@@ -135,17 +135,16 @@ def do_train(model, batcher, settings):
     train_dir = os.path.join(settings.log_root, "train")
     if not os.path.exists(train_dir): os.makedirs(train_dir)
 
-    model.build_graph() # build the graph
+    model.prepare_for_train()
     if settings.convert_to_coverage_model:
         assert settings.using_coverage, "To convert your non-coverage model to a coverage model, run with convert_to_coverage_model=True and coverage=True"
         convert_to_coverage_model(settings.log_root)
     if settings.restore_best_model:
         restore_best_model(settings.log_root)
     
-    saver = tf.train.Saver(max_to_keep=3) # keep 3 checkpoints at a time
     sv = tf.train.Supervisor(logdir=train_dir,
                              is_chief=True,
-                             saver=saver,
+                             saver=model._saver,
                              summary_op=None,
                              save_summaries_secs=60, # save summaries for tensorboard every 60 secs
                              save_model_secs=60, # checkpoint every 60 secs
