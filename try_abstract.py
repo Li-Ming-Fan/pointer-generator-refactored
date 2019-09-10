@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Sat Sep  7 23:10:54 2019
 
-@author: li-ming-fan
-"""
 
 '''
 1、如果子类在继承后一定要实现的方法，可以在父类中指定metaclass为abc模块的ABCMeta

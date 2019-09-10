@@ -151,8 +151,15 @@ class SummarizationModel(ModelBaseboard):
         #
         # output_tensors
         output_tensors = {}
-        output_tensors["final_dists"] = final_dists
+        output_tensors["encoder_states"] = encoder_outputs
+        output_tensors["dcd_init_state"] = dcd_init_state
+        #
+        output_tensors["dcd_out_state"] = out_state
+        output_tensors["p_gens"] = p_gens
+        output_tensors["coverage"] = coverage
+        #        
         output_tensors["vocab_scores"] = vocab_scores
+        output_tensors["final_dists"] = final_dists
         #
         if sett.using_coverage:
             output_tensors["attn_dists"] = attn_dists
@@ -216,6 +223,12 @@ class SummarizationModel(ModelBaseboard):
             
             tf.summary.scalar('loss', loss)
             
+            #
+            # loss_tensors
+            loss_tensors = {}
+            loss_tensors["loss"] = loss
+            #
+            
             # Calculate coverage loss from the attention distributions
             if sett.using_coverage:
                 attn_dists = output_tensors["attn_dists"]
@@ -227,12 +240,12 @@ class SummarizationModel(ModelBaseboard):
                 total_loss = loss + sett.cov_loss_wt * coverage_loss
                 tf.summary.scalar('total_loss', total_loss)
                 #
-            else:
-                total_loss = loss
-                coverage_loss = None
-            #
+                # add to loss_tensors
+                loss_tensors["total_loss"] = total_loss
+                loss_tensors["coverage_loss"] = coverage_loss                
+                #
         #
-        return loss, coverage_loss, total_loss
+        return loss_tensors
 
     #
     #
@@ -288,6 +301,43 @@ class SummarizationModel(ModelBaseboard):
         loss_tensors = self.build_loss(output_tensors, label_tensors)
         #
         #
+        # encoder part
+        self._enc_batch = input_tensors["src_seq"]
+        self._enc_lens = input_tensors["src_len"]
+        self._enc_padding_mask = input_tensors["src_mask"]
+        if self.settings.using_pointer_gen:
+            self._enc_batch_extend_vocab = input_tensors["src_seq_ed"]
+            self._max_art_oovs = input_tensors["max_art_oovs"]
+        #
+        # decoder part
+        self._dec_batch = input_tensors["dcd_seq"]
+        if self.settings.mode == "decode" and self.settings.using_coverage:
+            self.prev_coverage = input_tensors["prev_coverage"]
+        #
+        self._target_batch = label_tensors["labels_seq"]
+        self._dec_padding_mask = label_tensors["dcd_seq_mask"]
+        #
+        # output
+        self._enc_states = output_tensors["encoder_states"]
+        self._dec_in_state = output_tensors["dcd_init_state"]
+        #
+        self._dec_out_state = output_tensors["dcd_out_state"]
+        self.attn_dists = output_tensors["attn_dists"]  
+        self.p_gens = output_tensors["p_gens"]
+        self.coverage = output_tensors["coverage"]
+        #
+        if self.settings.mode == "decode":
+            self._topk_ids = output_tensors["topk_ids"]
+            self._topk_log_probs = output_tensors["topk_log_probs"]        
+        #
+        # loss        
+        self._loss = loss_tensors["loss"]
+        if self.settings.using_coverage:
+            self._total_loss = loss_tensors["total_loss"]
+            self._coverage_loss = loss_tensors["coverage_loss"] 
+        
+        #
+        # 
         self.global_step = tf.Variable(0, name='global_step', trainable=False)
         if self.settings.mode == 'train':
             self._add_train_op()

@@ -86,11 +86,11 @@ def parse_args():
     model_related.add_argument('--batch_size', type = int,
                                default = 16, help = 'batch_size')
     model_related.add_argument('--max_enc_steps', type = int, 
-                               default = 100, help = 'max_enc_steps')
+                               default = 40, help = 'max_enc_steps')
     model_related.add_argument('--max_dec_steps', type = int, 
                                default = 20, help = 'max_dec_steps')
     model_related.add_argument('--min_dec_steps', type = int, 
-                               default = 5, help = 'min_dec_steps')
+                               default = 4, help = 'min_dec_steps')
     model_related.add_argument('--beam_size', type = int, 
                                default = 4, help = 'beam_size')
     #
