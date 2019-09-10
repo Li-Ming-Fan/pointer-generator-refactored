@@ -40,7 +40,7 @@ class SummarizationModel(ModelBaseboard):
         #
         
     #
-    def make_feed_dict_train(self, batch):
+    def make_feed_dict_for_train(self, batch):
         """
         """
         pass

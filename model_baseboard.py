@@ -61,17 +61,17 @@ def get_warmup_and_exp_decayed_lr(settings, global_step):
 class ModelBaseboard(metaclass=ABCMeta):
     """
     """    
-    def __init__(self, settings, learning_rate_schedule = None, customized_optimizer = None):
+    def __init__(self, settings,
+                 learning_rate_schedule = get_warmup_and_exp_decayed_lr,
+                 customized_optimizer = None):
         """
         """
         self.set_model_settings(settings)        
         #
-        if learning_rate_schedule is None:
-            self.learning_rate_schedule = get_warmup_and_exp_decayed_lr
-        else:
-            self.learning_rate_schedule = learning_rate_schedule
-        #
+        self.learning_rate_schedule = learning_rate_schedule
         self.customized_optimizer = customized_optimizer
+        #
+        # self.learning_rate_tensor = self.learning_rate_schedule(self.settings, self.global_step)
         # self._opt = self.customized_optimizer(self.settings, self.learning_rate_tensor)
         #
         
@@ -95,35 +95,38 @@ class ModelBaseboard(metaclass=ABCMeta):
     #
     @abstractmethod
     def build_placeholder(self):
-        """  input_tensors, label_tensors = self.build_placeholder(self.settings)
+        """  input_tensors, label_tensors = self.build_placeholder()
         """
         pass
     
     @abstractmethod
     def build_inference(self, input_tensors):
-        """ output_tensors = self.build_inference(self.settings, input_tensors)
-            keep_prob = tf.get_variable("keep_prob", shape=[], dtype=tf.float32, trainable=False)
+        """ output_tensors = self.build_inference(input_tensors)
+            keep_prob = tf.get_variable("keep_prob", shape=[], dtype=tf.float32,
+                                        trainable=False)
         """
         pass
     
     @abstractmethod
     def build_loss(self, output_tensors, label_tensors):
-        """ loss_tensors = self.build_loss(self.settings, output_tensors, label_tensors)
+        """ loss_tensors = self.build_loss(output_tensors, label_tensors)
         """
         pass
     
     @abstractmethod
-    def make_feed_dict_train(self, batch):
-        """ feed to self.input_tensors and self.label_tensors
+    def make_feed_dict_for_train(self, batch):
+        """ feed to input_tensors and label_tensors
         """
         pass
     
+    #
+    # @abstractvalue
     #
     # self.results_train_one_batch = {}
     # self.results_eval_one_batch = {}
     # self.results_debug_one_batch = {}
     #
-    # feed_dict = self.get_feed_dict_predict(x_batch)
+    # feed_dict = self.make_feed_dict_for_predict(x_batch)
     # outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)
     #
     
@@ -173,10 +176,10 @@ class ModelBaseboard(metaclass=ABCMeta):
         #
     
     def predict_one_batch_with_pb(self, x_batch):
-        """ feed_dict = self.make_feed_dict_predict(x_batch)
+        """ feed_dict = self.make_feed_dict_for_predict(x_batch)
             outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict) 
         """
-        feed_dict = self.make_feed_dict_predict(x_batch)
+        feed_dict = self.make_feed_dict_for_predict(x_batch)
         outputs = self._sess.run(self.outputs_predict, feed_dict = feed_dict)        
         return outputs
     
@@ -402,29 +405,6 @@ class ModelBaseboard(metaclass=ABCMeta):
         #
         
     #
-    @staticmethod
-    def sum_up_gradients(list_grad_bundles):
-        """ list_grad_bundles: [ [(g1,v1), (g2, v2), ...],
-                                 [(g1,v1), (g2, v2), ...], ...,
-                                 [(g1,v1), (g2, v2), ...] ]
-            zip(*list_grad_bundles): [ ... ]
-        """
-        summed_grads = []
-        for grads_per_var in zip(*list_grad_bundles):
-            grads = []
-            for g, _ in grads_per_var:
-                expanded_g = tf.expand_dims(g, 0)
-                grads.append(expanded_g)
-            #
-            grads_concat = tf.concat(grads, 0)
-            grads_sum = tf.reduce_sum(grads_concat, 0)
-            grad_and_var = (grads_sum, grads_per_var[0][1])
-            summed_grads.append(grad_and_var)
-        #
-        return summed_grads
-    #
-        
-    #
     def assign_dropout_keep_prob(self, keep_prob):
         #
         with self._graph.as_default():
@@ -468,10 +448,10 @@ class ModelBaseboard(metaclass=ABCMeta):
     def load_ckpt_and_save_pb_file(model, dir_ckpt):
         """
         """
-        # is_train = model.settings.is_train
+        is_train = model.settings.is_train
         model.settings.is_train = False                      #
         #
-        # num_gpu = model.num_gpu
+        num_gpu = model.num_gpu
         model.num_gpu = 1                                    #
         #
         model.prepare_for_train_and_valid(dir_ckpt)         # loaded here 
@@ -488,8 +468,8 @@ class ModelBaseboard(metaclass=ABCMeta):
         str_info = 'pb_file saved: %s' % pb_file
         model.settings.logger.info(str_info)
         #
-        # model.settings.is_train = is_train           #
-        # model.num_gpu = num_gpu
+        model.settings.is_train = is_train           #
+        model.num_gpu = num_gpu
         #
 
     # graph and sess
