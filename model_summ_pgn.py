@@ -19,7 +19,7 @@
 import numpy as np
 import tensorflow as tf
 
-from model_baseboard import ModelBaseboard
+from Zeras.model_baseboard import ModelBaseboard
 
 from model_modules import do_encoding, do_state_bridging, do_projection
 from model_modules import do_decoding
