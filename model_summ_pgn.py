@@ -21,22 +21,22 @@ import tensorflow as tf
 
 from model_baseboard import ModelBaseboard
 
-from model_components import do_encoding, do_state_bridging
-from model_components import do_decoding, do_projection
-from model_components import calculate_final_dist
-from model_components import mask_and_average, calculate_coverage_loss
+from model_modules import do_encoding, do_state_bridging, do_projection
+from model_modules import do_decoding
+from model_modules import calculate_final_dist
+from model_modules import mask_and_average, calculate_coverage_loss
 
 
 class SummarizationModel(ModelBaseboard):
     """
     """
-    def __init__(self, settings, vocab):
+    def __init__(self, settings):
         """
         """
-        super(SummarizationModel, self).__init__(settings,
-             settings.learning_rate_schedule)
+        super(SummarizationModel, self).__init__(settings)
         #
-        # self.settings = settings
+        self.learning_rate_schedule = settings.learning_rate_schedule
+        # self.customized_optimizer = settings.customized_optimizer
         #
         
     #        
@@ -255,7 +255,7 @@ class SummarizationModel(ModelBaseboard):
 
     #
     #
-    def set_model_port_tensors(self):
+    def set_port_tensors(self):
         """
         """
         # encoder part
@@ -298,6 +298,8 @@ class SummarizationModel(ModelBaseboard):
         # summary
         self._summaries = tf.summary.merge_all()
         #
+        self.logger = self.settings.logger
+        #
         
         # results
         self.results_train_one_batch = {
@@ -319,7 +321,7 @@ class SummarizationModel(ModelBaseboard):
         #
 
     #
-    def make_feed_dict_for_train(self, batch, just_encode=False):
+    def make_feed_dict_for_train(self, batch):
         """
         """
         feed_dict = {}
@@ -331,20 +333,37 @@ class SummarizationModel(ModelBaseboard):
             feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
             feed_dict[self._max_art_oovs] = batch.max_art_oovs
         
-        if not just_encode:
-            feed_dict[self._dec_batch] = batch.dec_batch
-            feed_dict[self._target_batch] = batch.target_batch
-            feed_dict[self._dec_padding_mask] = batch.dec_padding_mask
+        #
+        feed_dict[self._dec_batch] = batch.dec_batch
+        feed_dict[self._target_batch] = batch.target_batch
+        feed_dict[self._dec_padding_mask] = batch.dec_padding_mask
         
         return feed_dict
 
     #    
+    # decode
+    def make_feed_dict_for_decode(self, batch):
+        """
+        """
+        feed_dict = {}
+        feed_dict[self._enc_batch] = batch.enc_batch
+        feed_dict[self._enc_lens] = batch.enc_lens
+        feed_dict[self._enc_padding_mask] = batch.enc_padding_mask
+        
+        if self.settings.using_pointer_gen:
+            feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
+            feed_dict[self._max_art_oovs] = batch.max_art_oovs
+        
+        return feed_dict
+    
     #
     def run_encoder(self, sess, batch):
-        """ For beam search decoding. Run the encoder on the batch and return the encoder states and decoder initial state.
+        """ For beam search decoding.
+            Run the encoder on the batch and return the encoder states and decoder initial state.
         """
-        feed_dict = self._make_feed_dict(batch, just_enc=True) # feed the batch into the placeholders
-        (enc_states, dec_in_state, global_step) = sess.run([self._enc_states, self._dec_in_state, self.global_step], feed_dict) # run the encoder
+        feed_dict = self.make_feed_dict_for_decode(batch)
+        (enc_states, dec_in_state, global_step) = sess.run(
+                [self._enc_states, self._dec_in_state, self.global_step], feed_dict) # run the encoder
         
         # dec_in_state is LSTMStateTuple shape ([batch_size,hidden_dim],[batch_size,hidden_dim])
         # Given that the batch is a single example repeated, dec_in_state is identical across the batch so we just take the top row.

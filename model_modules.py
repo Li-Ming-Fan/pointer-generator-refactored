@@ -8,7 +8,7 @@ Created on Sat Sep  7 18:56:13 2019
 
 import tensorflow as tf
 
-from attention_decoder import attention_decoder
+from model_component_decoder import attention_decoder
 
 #
 def do_encoding(encoder_inputs, seq_len, sett):
@@ -61,6 +61,7 @@ def do_state_bridging(fw_st, bw_st, settings):
         
     return tf.contrib.rnn.LSTMStateTuple(new_c, new_h) # Return new cell and state
 
+#
 def do_decoding(dcd_inputs, sett):
     """
     """
@@ -90,7 +91,9 @@ def do_decoding(dcd_inputs, sett):
             use_coverage = sett.using_coverage, prev_coverage = prev_coverage)
     
     return outputs, out_state, attn_dists, p_gens, coverage
- 
+
+
+#
 def do_projection(decoder_outputs, sett):
     """
     """
@@ -120,6 +123,7 @@ def do_projection(decoder_outputs, sett):
     #
     return vocab_dists, vocab_scores
 
+#
 def calculate_final_dist(vocab_dists, attn_dists, p_gens,
                          src_seq_ed, max_art_oovs, sett):
     """

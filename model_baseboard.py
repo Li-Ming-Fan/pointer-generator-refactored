@@ -22,6 +22,9 @@ This class is meant to be task-agnostic.
 #
 def get_warmup_and_exp_decayed_lr(settings, global_step):
     """ lr_base, warmup_steps, decay_steps, decay_rate, staircase
+        
+        learning_rate_schedule = get_warmup_and_exp_decayed_lr
+        self.learning_rate_tensor = self.learning_rate_schedule(self.settings, self.global_step)
     """
     learning_rate = tf.constant(value = settings.learning_rate_base,
                                 shape = [], dtype = tf.float32)
@@ -57,22 +60,30 @@ def get_warmup_and_exp_decayed_lr(settings, global_step):
     return learning_rate
     #
     
+def get_adam_optimizer(settings, learning_rate_tensor_or_value):
+    """ 
+        customized_optimizer = get_adam_optimizer
+        self._opt = self.customized_optimizer(self.settings, self.learning_rate_tensor)
+        
+        grad_and_vars = self._opt.compute_gradients(self.loss_train_tensor)
+        self.train_op = self._opt.apply_gradients(grad_and_vars, global_step = self.global_step)
+    """
+    opt = tf.train.AdamOptimizer(learning_rate_tensor_or_value, beta1 = settings.momentum)
+    return opt
+    #
+    
+    
 #
 class ModelBaseboard(metaclass=ABCMeta):
     """
     """    
-    def __init__(self, settings,
-                 learning_rate_schedule = get_warmup_and_exp_decayed_lr,
-                 customized_optimizer = None):
+    def __init__(self, settings):
         """
         """
-        self.set_model_settings(settings)        
+        self.set_model_settings(settings)
         #
-        self.learning_rate_schedule = learning_rate_schedule
-        self.customized_optimizer = customized_optimizer
-        #
-        # self.learning_rate_tensor = self.learning_rate_schedule(self.settings, self.global_step)
-        # self._opt = self.customized_optimizer(self.settings, self.learning_rate_tensor)
+        self.learning_rate_schedule = get_warmup_and_exp_decayed_lr
+        self.customized_optimizer = get_adam_optimizer
         #
         
     #
@@ -114,7 +125,7 @@ class ModelBaseboard(metaclass=ABCMeta):
         pass
     
     @abstractmethod
-    def set_model_port_tensors(self):
+    def set_port_tensors(self):
         """ 
         self.src_seq = input_tensors["src_seq"]
         ...
@@ -142,14 +153,14 @@ class ModelBaseboard(metaclass=ABCMeta):
     def run_train_one_batch(self, one_batch):
         """ self.results_train_one_batch, NEED to be defined
         """
-        feed_dict = self.make_feed_dict_train(one_batch)
+        feed_dict = self.make_feed_dict_for_train(one_batch)
         results = self._sess.run(self.results_train_one_batch, feed_dict = feed_dict)
         return results
         
     def run_eval_one_batch(self, one_batch):
         """ self.results_eval_one_batch, NEED to be defined
         """
-        feed_dict = self.make_feed_dict_train(one_batch)        
+        feed_dict = self.make_feed_dict_for_train(one_batch)        
         results = self._sess.run(self.results_eval_one_batch, feed_dict = feed_dict)
         return results
         
@@ -157,7 +168,7 @@ class ModelBaseboard(metaclass=ABCMeta):
         """ self.results_debug_one_batch, NEED to be defined
         """
         assert self.num_gpu == 1, "debug mode can only be run with single gpu"
-        feed_dict = self.make_feed_dict_train(one_batch)
+        feed_dict = self.make_feed_dict_for_train(one_batch)
         results = self._sess.run(self.results_debug_one_batch, feed_dict = feed_dict)        
         return results
     
@@ -211,8 +222,8 @@ class ModelBaseboard(metaclass=ABCMeta):
                         labels_split[idx][key] = tensor_split[idx]
                 #
                 # model, inference, loss
-                outputs_list = {}
-                lossputs_list = {}
+                outputs_dict = {}
+                lossputs_dict = {}
                 #
                 vs_str = self.vs_str_multi_gpu            
                 with tf.variable_scope(vs_str):
@@ -226,47 +237,47 @@ class ModelBaseboard(metaclass=ABCMeta):
                             #
                             # output_tensors
                             for key, value in output_tensors:
-                                if key in outputs_list:
-                                    outputs_list[key] = outputs_list[key].append(value)
+                                if key in outputs_dict:
+                                    outputs_dict[key] = outputs_dict[key].append(value)
                                 else:
-                                    outputs_list[key] = [value]
+                                    outputs_dict[key] = [value]
                                 #
                             #
                             # loss_tensors
                             for key, value in loss_tensors:
-                                if key in lossputs_list:
-                                    lossputs_list[key] = lossputs_list[key].append(value)
+                                if key in lossputs_dict:
+                                    lossputs_dict[key] = lossputs_dict[key].append(value)
                                 else:
-                                    lossputs_list[key] = [value]
+                                    lossputs_dict[key] = [value]
                                 #
                             #
                 #
                 # outputs
-                for key, value in outputs_list:
+                for key, value in outputs_dict:
                     if len(value[0].get_shape().as_list()) > 0: # rank >= 1
                         #
-                        outputs_list[key] = tf.concat(value, axis=0)
+                        outputs_dict[key] = tf.concat(value, axis=0)
                         #
                 #
                 # lossputs
-                for key, value in lossputs_list:
+                for key, value in lossputs_dict:
                     if len(value[0].get_shape().as_list()) > 0: # rank >= 1
                         #
-                        lossputs_list[key] = tf.concat(value, axis=0)
+                        lossputs_dict[key] = tf.concat(value, axis=0)
                         #
                     elif key == "loss_train": # loss_train
                         value_sum = 0
                         for idx in range(self.num_gpu):
                             value_sum += value * gpu_batch_split[idx]
                         #
-                        lossputs_list[key] = value_sum / self.settings.batch_size
+                        lossputs_dict[key] = value_sum / self.settings.batch_size
                         #
                 #
                 # tensors
                 self.input_tensors = input_tensors
                 self.label_tensors = label_tensors
-                self.output_tensors = outputs_list
-                self.loss_tensors = lossputs_list
+                self.output_tensors = outputs_dict
+                self.loss_tensors = lossputs_dict
                 #
             #
             # metric and loss
@@ -332,15 +343,14 @@ class ModelBaseboard(metaclass=ABCMeta):
                 self.global_norm = global_norm
             #
             # train_op
-            self.train_op = self._opt.apply_gradients(grad_and_vars,
-                                                      global_step = self.global_step)
+            self.train_op = self._opt.apply_gradients(grad_and_vars, global_step = self.global_step)
             #
             
             #
             # set port tensors
-            self.set_model_port_tensors()
+            self.set_port_tensors()
             #
-                        
+            
             #                
             # save info
             self._saver = tf.train.Saver()
@@ -435,12 +445,12 @@ class ModelBaseboard(metaclass=ABCMeta):
         """
         """
         is_train = model.settings.is_train
-        model.settings.is_train = False                      #
-        #
         num_gpu = model.num_gpu
+        #
+        model.settings.is_train = False                      #
         model.num_gpu = 1                                    #
         #
-        model.prepare_for_train_and_valid(dir_ckpt)         # loaded here 
+        model.prepare_for_train_and_valid(dir_ckpt)          # loaded here 
         model.assign_dropout_keep_prob(1.0)
         #
         pb_file = os.path.join(dir_ckpt, "model_saved.pb")
@@ -454,7 +464,7 @@ class ModelBaseboard(metaclass=ABCMeta):
         str_info = 'pb_file saved: %s' % pb_file
         model.settings.logger.info(str_info)
         #
-        model.settings.is_train = is_train           #
+        model.settings.is_train = is_train
         model.num_gpu = num_gpu
         #
         
@@ -493,7 +503,8 @@ class ModelBaseboard(metaclass=ABCMeta):
         #
         return self._graph, self._sess
         #
-            
+
+#
 if __name__ == '__main__':
     
     pass

@@ -78,7 +78,7 @@ class Hypothesis(object):
         return self.log_prob / len(self.tokens)
 
 #
-def run_beam_search(sess, model, vocab, batch, settings):
+def run_beam_search(model, batch, vocab, settings):
     """ Performs beam search decoding on the given example.
 
         Args:
@@ -90,6 +90,8 @@ def run_beam_search(sess, model, vocab, batch, settings):
         Returns:
             best_hyp: Hypothesis object; the best hypothesis found by beam search.
     """
+    graph, sess = model.get_model_graph_and_sess()
+    
     # Run the encoder to get the encoder hidden states and decoder initial state
     enc_states, dec_in_state = model.run_encoder(sess, batch)
     # dec_in_state is a LSTMStateTuple

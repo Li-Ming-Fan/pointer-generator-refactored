@@ -27,11 +27,8 @@ from data_utils import example_generator, do_batch_std
 
 # from model import SummarizationModel
 from model_summ_pgn import SummarizationModel
-
-from decode import BeamSearchDecoder
 import model_utils
 
-import copy
 
 #
 DATA_PATH = {"eval": "../finished_files_trans/chunked/val_*",
@@ -77,20 +74,20 @@ def parse_args():
                                default = 1.0, help = 'coverage_loss_wt')
     #
     model_related.add_argument('--hidden_dim', type = int, 
-                               default = 256, help = 'hidden_dim')
+                               default = 32, help = 'hidden_dim')
     model_related.add_argument('--emb_dim', type = int, 
-                               default = 128, help = 'emb_dim')
+                               default = 32, help = 'emb_dim')
     model_related.add_argument('--vocab_size', type = int, 
-                               default = 50000, help = 'vocab_size')
+                               default = 5000, help = 'vocab_size')
     #
     model_related.add_argument('--batch_size', type = int,
                                default = 16, help = 'batch_size')
     model_related.add_argument('--max_enc_steps', type = int, 
-                               default = 400, help = 'max_enc_steps')
+                               default = 40, help = 'max_enc_steps')
     model_related.add_argument('--max_dec_steps', type = int, 
-                               default = 100, help = 'max_dec_steps')
+                               default = 20, help = 'max_dec_steps')
     model_related.add_argument('--min_dec_steps', type = int, 
-                               default = 35, help = 'min_dec_steps')
+                               default = 4, help = 'min_dec_steps')
     model_related.add_argument('--beam_size', type = int, 
                                default = 4, help = 'beam_size')
     #
@@ -121,42 +118,18 @@ def main(settings):
     tf.logging.set_verbosity(tf.logging.INFO) # choose what level of logging you want
     tf.logging.info('Starting seq2seq_attention in %s mode...', (settings.mode))
     
-    # Change log_root to settings.log_root/settings.exp_name and create the dir if necessary
-    settings.log_root = os.path.join(settings.log_root, settings.exp_name)
-    if not os.path.exists(settings.log_root):
-        if settings.mode=="train":
-            os.makedirs(settings.log_root)
-        else:
-            raise Exception("Logdir %s doesn't exist. Run in train mode to create it." % (settings.log_root))
-
+    # vocab
     vocab = Vocab(settings.vocab_path, settings.vocab_size) # create a vocabulary
     settings.vocab = vocab
-
+    
     # If in decode mode, set batch_size = beam_size
     # Reason: in decode mode, we decode one example at a time.
-    # On each step, we have beam_size-many hypotheses in the beam, so we need to make a batch of these hypotheses.
+    # On each step, we have beam_size-many hypotheses in the beam,
+    # so we need to make a batch of these hypotheses.
     if settings.mode == 'decode':
         settings.batch_size = settings.beam_size
-
-    # If single_pass=True, check we're in decode mode
-    if settings.single_pass and settings.mode!='decode':
-        raise Exception("The single_pass flag should only be True in decode mode")
-
-    """
-    # Make a namedtuple hps, containing the values of the hyperparameters that the model needs
-    hparam_list = ['mode', 'lr', 'adagrad_init_acc', 'rand_unif_init_mag', 'trunc_norm_init_std', 'max_grad_norm', 'hidden_dim', 'emb_dim', 'batch_size', 'max_dec_steps', 'max_enc_steps', 'coverage', 'cov_loss_wt', 'pointer_gen']
-    hps_dict = {}
-    for key, val in settings.__settings.items(): # for each flag
-        if key in hparam_list: # if it's in the list
-            hps_dict[key] = val.value # add it to the dict
-    hps = namedtuple("HParams", hps_dict.keys())(**hps_dict)
-    """
-    
-    hps = settings
-
-    # Create a batcher object that will create minibatches of data
-    # batcher = Batcher(settings.data_path, vocab, hps, single_pass=settings.single_pass)
-
+        
+    # data
     example_gen = lambda single_pass: example_generator(settings.data_path,
                                                         single_pass)
     batch_standardizer = lambda list_exams: do_batch_std(list_exams, settings)
@@ -165,22 +138,41 @@ def main(settings):
                           settings.batch_size, settings.single_pass)
     #
     
+    
+    #
+    hps = settings
     #
     tf.set_random_seed(111) # a seed value for randomness
     #
+    dir_ckpt = settings.model_dir
+    #
     if hps.mode == 'train':
-        print("creating model...")
-        model = SummarizationModel(hps, vocab)
+        model = SummarizationModel(hps)
+        model.prepare_for_train(dir_ckpt)
+        #
         model_utils.do_train(model, batcher, settings)
     elif hps.mode == 'eval':
-        model = SummarizationModel(hps, vocab)
-        model_utils.do_eval(model, batcher, vocab, settings)
+        model = SummarizationModel(hps)
+        model.prepare_for_train(dir_ckpt)
+        model.assign_dropout_keep_prob(1.0)
+        #
+        model_utils.do_eval(model, batcher, settings)
     elif hps.mode == 'decode':
-        decode_model_hps = copy.deepcopy(hps)  # This will be the hyperparameters for the decoder model
-        decode_model_hps.max_dec_steps = 1 # The model is configured with max_dec_steps=1 because we only ever run one step of the decoder at a time (to do beam search). Note that the batcher is initialized with max_dec_steps equal to e.g. 100 because the batches need to contain the full summaries
-        model = SummarizationModel(decode_model_hps, vocab)
-        decoder = BeamSearchDecoder(model, batcher, vocab, settings)
-        decoder.decode() # decode indefinitely (unless single_pass=True, in which case deocde the dataset exactly once)
+        #
+        import copy
+        hps_decode = copy.copy(hps)
+        hps_decode.max_dec_steps = 1
+        #
+        model = SummarizationModel(hps_decode)
+        model.prepare_for_train(dir_ckpt)
+        model.assign_dropout_keep_prob(1.0)
+        # The model is configured with max_dec_steps=1
+        # because we only ever run one step of the decoder at a time (to do beam search).
+        # Note that the batcher is initialized with max_dec_steps equal to e.g. 100
+        # because the batches need to contain the full summaries
+        #
+        model_utils.do_decode(model, batcher, hps)
+        #
     else:
         raise ValueError("The 'mode' flag must be one of train/eval/decode")
 
@@ -199,6 +191,28 @@ if __name__ == '__main__':
     args.soft_placement = False
     args.gpu_mem_growth = True
     
+    args.reg_lambda = 0.0
+    args.reg_exclusions = []
+    args.learning_rate_base = args.lr
+    
+    args.learning_rate_schedule = lambda settings, global_step: args.lr
+    
+    args.optimizer_type = "adagrad"
+    args.grad_clip = args.max_grad_norm
+    
+    args.keep_prob = 0.7
+    
+    args.check_period_batch = 10
+    args.base_dir = LOG_ROOT
+    args.model_dir = os.path.join(LOG_ROOT, "model_pgn")
+    args.model_name = "pgn"
+    
+    if not os.path.exists(args.base_dir): os.mkdir(args.base_dir)
+    if not os.path.exists(args.model_dir): os.mkdir(args.model_dir)
+    
+    import logging
+    args.logger = logging.getLogger()
+    args.logger.setLevel(logging.INFO)
 
     #
     if args.data_path is None:

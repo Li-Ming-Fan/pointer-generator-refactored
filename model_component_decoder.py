@@ -156,8 +156,7 @@ def attention_decoder(decoder_inputs, initial_state, encoder_states, enc_padding
             
         return outputs, state, attn_dists, p_gens, coverage
 
-
-
+#
 def linear(args, output_size, bias, bias_start=0.0, scope=None):
     """Linear map: sum_i(args[i] * W[i]), where W[i] is a variable.
     

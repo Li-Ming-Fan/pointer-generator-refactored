@@ -112,7 +112,8 @@ def outputids2words(id_list, vocab, article_oovs):
             article_oov_idx = i - vocab.size()
             try:
                 w = article_oovs[article_oov_idx]
-            except ValueError as e: # i doesn't correspond to an article oov
+            except IndexError as e: # i doesn't correspond to an article oov
+                print(id_list)
                 raise ValueError('Error: model produced word ID %i which corresponds to article OOV %i but this example only has %i article OOVs' % (i, article_oov_idx, len(article_oovs)))
         #
         words.append(w)
