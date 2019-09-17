@@ -126,10 +126,8 @@ def main(settings):
     # Reason: in decode mode, we decode one example at a time.
     # On each step, we have beam_size-many hypotheses in the beam,
     # so we need to make a batch of these hypotheses.
-    batch_size_for_batcher = settings.batch_size
     if settings.mode == 'decode':
         settings.batch_size = settings.beam_size
-        batch_size_for_batcher = 1
         
     # data
     example_gen = lambda single_pass: example_generator(settings.data_path,
@@ -137,7 +135,7 @@ def main(settings):
     batch_standardizer = lambda list_exams: do_batch_std(list_exams, settings)
     #
     batcher = DataBatcher(example_gen, batch_standardizer,
-                          batch_size_for_batcher, settings.single_pass)
+                          settings.batch_size, settings.single_pass)
     #
     
     

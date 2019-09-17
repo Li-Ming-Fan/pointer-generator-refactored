@@ -399,7 +399,11 @@ class SummarizationModel(ModelBaseboard):
         
         if self.settings.using_pointer_gen:
             feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
-            feed_dict[self._max_art_oovs] = batch.max_art_oovs
+            if self.settings.mode == "decode":
+                feed_dict[self._max_art_oovs] = len(batch.art_oovs[0])
+            else:
+                feed_dict[self._max_art_oovs] = batch.max_art_oovs
+            #
             results_to_return['p_gens'] = self.p_gens
             
         if self.settings.using_coverage:
