@@ -298,8 +298,6 @@ class SummarizationModel(ModelBaseboard):
         # summary
         self._summaries = tf.summary.merge_all()
         #
-        self.logger = self.settings.logger
-        #
         
         # results
         self.results_train_one_batch = {
