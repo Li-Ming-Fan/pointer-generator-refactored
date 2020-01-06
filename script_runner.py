@@ -69,7 +69,7 @@ def parse_args():
     """
     parser = argparse.ArgumentParser('Summarization')
     parser.add_argument('--mode', choices=['train', 'eval', 'convert', 'decode'],
-                        default = 'decode', help = 'run mode')
+                        default = 'train', help = 'run mode')
     parser.add_argument('--single_pass', type = bool,
                         default = False, help='single_pass')
     #
