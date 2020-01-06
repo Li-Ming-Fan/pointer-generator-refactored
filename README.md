@@ -9,7 +9,7 @@ This is a refactored version of the repo https://github.com/becxer/pointer-gener
 
 Using Zeras for data_batcher and model_baseboard:
 ```
-pip install Zeras==0.4.4
+pip install Zeras==0.4.4    #  (or 0.4.3)
 ```
 
 
