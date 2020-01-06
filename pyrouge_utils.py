@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 import logging
-import pyrouge
 import json
 
+# import pyrouge
 
 #
 default_rouge_score = {'rouge_1_recall': 0.0, 'rouge_1_recall_cb': 0.0, 'rouge_1_recall_ce': 0.0,

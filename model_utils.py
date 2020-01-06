@@ -4,7 +4,7 @@ import time
 
 import data_utils
 
-import prediction_beam_search
+import decoding_beam_search
 from vocab import STOP_DECODING
 import pyrouge_utils
 
@@ -29,7 +29,7 @@ def do_train(model, batcher, settings):
         if global_step % settings.check_period_batch == 0:
             model.save_ckpt(settings.model_dir, settings.model_name, global_step)
             #
-            loss = results_train["loss"]
+            loss = results_train["loss_optim"]
             print("global_step, loss: %d, %f" % (global_step, loss))
             #
             model.logger.info("global_step, loss: %d, %f" % (global_step, loss))
@@ -58,7 +58,7 @@ def do_eval(model, batcher, settings):
         #
         results_eval = model.run_eval_one_batch(batch)   # just for train
         #
-        print(results_eval)
+        print(results_eval.keys())
         #
     #
     
@@ -83,16 +83,16 @@ def do_decode(model, batcher, settings):
             # rouge_log(results_dict, self._decode_dir)
             return
         #
-        original_article = batch.original_articles[0]  # string
-        original_abstract = batch.original_abstracts[0]  # string
-        original_abstract_sents = batch.original_abstracts_sents[0]  # list of strings
+        original_article = batch["original_articles"][0]  # string
+        original_abstract = batch["original_abstracts"][0]  # string
+        original_abstract_sents = batch["original_abstracts_sents"][0]  # list of strings
         
         article_withunks = data_utils.show_art_oovs(original_article, vocab) # string
         abstract_withunks = data_utils.show_abs_oovs(original_abstract, vocab,
-                                                     (batch.art_oovs[0] if settings.using_pointer_gen else None)) # string
+                                                     (batch["art_oovs"][0] if settings.using_pointer_gen else None)) # string
         
         # Run beam search to get best Hypothesis
-        best_hyp = prediction_beam_search.run_beam_search(model, batch, vocab, settings)
+        best_hyp = decoding_beam_search.run_beam_search(model, batch, vocab, settings)
         
         #
         print("---------------------------------------------------------------------------")
@@ -102,7 +102,7 @@ def do_decode(model, batcher, settings):
         # Extract the output ids from the hypothesis and convert back to words
         output_ids = [int(t) for t in best_hyp.tokens[1:]]
         decoded_words = data_utils.outputids2words(output_ids, vocab,
-                                             (batch.art_oovs[0] if settings.using_pointer_gen else None))
+                                             (batch["art_oovs"][0] if settings.using_pointer_gen else None))
         
         # Remove the [STOP] token from decoded_words, if necessary
         try:

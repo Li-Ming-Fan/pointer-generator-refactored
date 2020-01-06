@@ -69,7 +69,7 @@ def parse_args():
     """
     parser = argparse.ArgumentParser('Summarization')
     parser.add_argument('--mode', choices=['train', 'eval', 'convert', 'decode'],
-                        default = 'train', help = 'run mode')
+                        default = 'decode', help = 'run mode')
     parser.add_argument('--single_pass', type = bool,
                         default = False, help='single_pass')
     #
@@ -172,12 +172,12 @@ def main(settings):
     #
     if hps.mode == 'train':
         model = SummarizationModel(hps)
-        model.prepare_for_train(dir_ckpt)
+        model.prepare_for_train_and_valid(dir_ckpt)
         #
         model_utils.do_train(model, batcher, settings)
     elif hps.mode == 'eval':
         model = SummarizationModel(hps)
-        model.prepare_for_train(dir_ckpt)
+        model.prepare_for_train_and_valid(dir_ckpt)
         model.assign_dropout_keep_prob(1.0)
         #
         model_utils.do_eval(model, batcher, settings)
@@ -188,7 +188,7 @@ def main(settings):
         hps_decode.max_dec_steps = 1
         #
         model = SummarizationModel(hps_decode)
-        model.prepare_for_train(dir_ckpt)
+        model.prepare_for_train_and_valid(dir_ckpt)
         model.assign_dropout_keep_prob(1.0)
         # The model is configured with max_dec_steps=1
         # because we only ever run one step of the decoder at a time (to do beam search).
@@ -207,6 +207,7 @@ if __name__ == '__main__':
     #
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    args.gpu_available = args.gpu
     #
     if args.debug == 0:
         assign_params_from_dict(args, params_large)
@@ -214,14 +215,24 @@ if __name__ == '__main__':
         assign_params_from_dict(args, params_small)
     #
     
+    args.warmup_steps = 2000
+    args.decay_steps = 2000
+    args.learning_rate_minimum = 1e-7
+    args.lr_power = 1
+    args.lr_cycle = True
+    args.beta_1 = 0.9
+    args.beta_2 = 0.99
+    
+    args.grad_clip = args.max_grad_norm
+    args.use_metric_in_graph = False
+    
+    args.keep_prob = 0.7
+    
     #
     args.learning_rate_base = args.lr
     args.learning_rate_schedule = lambda settings, global_step: args.lr
     
-    args.optimizer_type = "adagrad"
-    args.grad_clip = args.max_grad_norm
-    
-    args.keep_prob = 0.7
+    args.optimizer_type = "adam_wd" # "adagrad"
     
     args.check_period_batch = 10
     args.base_dir = LOG_ROOT

@@ -449,4 +449,22 @@ def do_batch_std(list_examples_raw, settings):
     # print(len(list_examples))
     #
     batch = Batch(list_examples, settings, settings.vocab)
-    return batch
+    #
+    batch_dict = {}
+    batch_dict["src_seq"] = batch.enc_batch
+    batch_dict["src_len"] = batch.enc_lens
+    batch_dict["src_mask"] = batch.enc_padding_mask
+    batch_dict["dcd_seq"] = batch.dec_batch
+    batch_dict["labels_seq"] = batch.target_batch
+    batch_dict["dcd_seq_mask"] = batch.dec_padding_mask
+    #
+    if settings.using_pointer_gen:
+        batch_dict["src_seq_ed"] = batch.enc_batch_extend_vocab
+        batch_dict["max_art_oovs"] = batch.max_art_oovs
+        batch_dict["art_oovs"] = batch.art_oovs
+    #
+    batch_dict["original_articles"] = batch.original_articles
+    batch_dict["original_abstracts"] = batch.original_abstracts
+    batch_dict["original_abstracts_sents"] = batch.original_abstracts_sents
+    #
+    return batch_dict

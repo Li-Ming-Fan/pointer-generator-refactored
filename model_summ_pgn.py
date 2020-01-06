@@ -21,10 +21,10 @@ import tensorflow as tf
 
 from Zeras.model_baseboard import ModelBaseboard
 
-from model_modules import do_encoding, do_state_bridging, do_projection
-from model_modules import do_decoding
-from model_modules import calculate_final_dist
-from model_modules import mask_and_average, calculate_coverage_loss
+from model_components import do_encoding, do_state_bridging, do_projection
+from model_components import do_decoding
+from model_components import calculate_final_dist
+from model_components import mask_and_average, calculate_coverage_loss
 
 
 class SummarizationModel(ModelBaseboard):
@@ -34,9 +34,9 @@ class SummarizationModel(ModelBaseboard):
         """
         """
         super(SummarizationModel, self).__init__(settings)
+        self.settings = settings
         #
-        self.learning_rate_schedule = settings.learning_rate_schedule
-        # self.customized_optimizer = settings.customized_optimizer
+        self.debug_tensor_names = []
         #
         
     #        
@@ -78,6 +78,9 @@ class SummarizationModel(ModelBaseboard):
         label_tensors = {}
         label_tensors["labels_seq"] = labels_seq
         label_tensors["dcd_seq_mask"] = dcd_seq_mask
+        #
+        self.input_tensors = input_tensors
+        self.label_tensors = label_tensors
         #
         return input_tensors, label_tensors
     
@@ -180,11 +183,13 @@ class SummarizationModel(ModelBaseboard):
             output_tensors["topk_log_probs"] = topk_log_probs
             #            
         #
+        self.output_tensors = output_tensors
+        #
         return output_tensors
         #
     
     #
-    def build_loss(self, output_tensors, label_tensors):
+    def build_loss_and_metric(self, output_tensors, label_tensors):
         """
         """
         sett = self.settings
@@ -226,7 +231,7 @@ class SummarizationModel(ModelBaseboard):
             #
             # loss_tensors
             loss_tensors = {}
-            loss_tensors["loss"] = loss
+            loss_tensors["loss_seq"] = loss
             #
             
             # Calculate coverage loss from the attention distributions
@@ -244,12 +249,15 @@ class SummarizationModel(ModelBaseboard):
                 loss_tensors["total_loss"] = total_loss
                 loss_tensors["coverage_loss"] = coverage_loss                
                 #
-                loss_tensors["loss_train"] = total_loss
+                loss_tensors["loss_model"] = total_loss
                 #
             else:
                 #
-                loss_tensors["loss_train"] = loss
+                loss_tensors["loss_model"] = loss
                 #
+        #
+        self.loss_tensors = loss_tensors
+        self.set_port_tensors()
         #
         return loss_tensors
 
@@ -259,20 +267,22 @@ class SummarizationModel(ModelBaseboard):
         """
         """
         # encoder part
-        self._enc_batch = self.input_tensors["src_seq"]
-        self._enc_lens = self.input_tensors["src_len"]
-        self._enc_padding_mask = self.input_tensors["src_mask"]
+        self._src_seq = self.input_tensors["src_seq"]
+        self._src_len = self.input_tensors["src_len"]
+        self._src_mask = self.input_tensors["src_mask"]
         if self.settings.using_pointer_gen:
-            self._enc_batch_extend_vocab = self.input_tensors["src_seq_ed"]
+            self._src_seq_ed = self.input_tensors["src_seq_ed"]
             self._max_art_oovs = self.input_tensors["max_art_oovs"]
         #
         # decoder part
-        self._dec_batch = self.input_tensors["dcd_seq"]
+        self._dcd_seq = self.input_tensors["dcd_seq"]
         if self.settings.mode == "decode" and self.settings.using_coverage:
             self.prev_coverage = self.input_tensors["prev_coverage"]
         #
-        self._target_batch = self.label_tensors["labels_seq"]
-        self._dec_padding_mask = self.label_tensors["dcd_seq_mask"]
+        self._labels_seq = self.label_tensors["labels_seq"]
+        self._dcd_seq_mask = self.label_tensors["dcd_seq_mask"]
+        #
+        
         #
         # output
         self._enc_states = self.output_tensors["encoder_states"]
@@ -288,17 +298,17 @@ class SummarizationModel(ModelBaseboard):
             self._topk_log_probs = self.output_tensors["topk_log_probs"]        
         #
         # loss        
-        self._loss = self.loss_tensors["loss"]
+        self._loss = self.loss_tensors["loss_seq"]
         if self.settings.using_coverage:
             self._total_loss = self.loss_tensors["total_loss"]
             self._coverage_loss = self.loss_tensors["coverage_loss"]        
         #
         
+        """
         #
         # summary
         self._summaries = tf.summary.merge_all()
-        #
-        
+        #        
         # results
         self.results_train_one_batch = {
                 'train_op': self.train_op,
@@ -317,40 +327,22 @@ class SummarizationModel(ModelBaseboard):
         if self.settings.using_coverage:
             self.results_eval_one_batch['coverage_loss'] = self._coverage_loss
         #
-
-    #
-    def make_feed_dict_for_train(self, batch):
         """
-        """
-        feed_dict = {}
-        feed_dict[self._enc_batch] = batch.enc_batch
-        feed_dict[self._enc_lens] = batch.enc_lens
-        feed_dict[self._enc_padding_mask] = batch.enc_padding_mask
-        
-        if self.settings.using_pointer_gen:
-            feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
-            feed_dict[self._max_art_oovs] = batch.max_art_oovs
-        
         #
-        feed_dict[self._dec_batch] = batch.dec_batch
-        feed_dict[self._target_batch] = batch.target_batch
-        feed_dict[self._dec_padding_mask] = batch.dec_padding_mask
-        
-        return feed_dict
 
     #    
     # decode
-    def make_feed_dict_for_decode(self, batch):
+    def make_feed_dict_for_decode(self, batch_dict):
         """
         """
         feed_dict = {}
-        feed_dict[self._enc_batch] = batch.enc_batch
-        feed_dict[self._enc_lens] = batch.enc_lens
-        feed_dict[self._enc_padding_mask] = batch.enc_padding_mask
+        feed_dict[self._src_seq] = batch_dict["src_seq"]
+        feed_dict[self._src_len] = batch_dict["src_len"]
+        feed_dict[self._src_mask] = batch_dict["src_mask"]
         
         if self.settings.using_pointer_gen:
-            feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
-            feed_dict[self._max_art_oovs] = batch.max_art_oovs
+            feed_dict[self._src_seq_ed] = batch_dict["src_seq_ed"]
+            feed_dict[self._max_art_oovs] = batch_dict["max_art_oovs"]
         
         return feed_dict
     
@@ -383,9 +375,9 @@ class SummarizationModel(ModelBaseboard):
         
         feed_dict = {
                 self._enc_states: enc_states,
-                self._enc_padding_mask: batch.enc_padding_mask,
+                self._src_mask: batch["src_mask"],
                 self._dec_in_state: new_dec_in_state,
-                self._dec_batch: np.transpose(np.array([latest_tokens])),
+                self._dcd_seq: np.transpose(np.array([latest_tokens])),
         }
         
         results_to_return = {
@@ -396,11 +388,11 @@ class SummarizationModel(ModelBaseboard):
         }
         
         if self.settings.using_pointer_gen:
-            feed_dict[self._enc_batch_extend_vocab] = batch.enc_batch_extend_vocab
+            feed_dict[self._src_seq_ed] = batch["src_seq_ed"]
             if self.settings.mode == "decode":
-                feed_dict[self._max_art_oovs] = len(batch.art_oovs[0])
+                feed_dict[self._max_art_oovs] = len(batch["art_oovs"][0])
             else:
-                feed_dict[self._max_art_oovs] = batch.max_art_oovs
+                feed_dict[self._max_art_oovs] = batch["max_art_oovs"]
             #
             results_to_return['p_gens'] = self.p_gens
             
